@@ -656,6 +656,10 @@ class MockPiApp(App):
     TITLE = "Mock pi"
     
     CSS = """
+    Screen {
+        layout: vertical;
+    }
+    
     #chat-container {
         height: 1fr;
         border: solid green;
@@ -669,6 +673,10 @@ class MockPiApp(App):
     
     #chat-input {
         width: 100%;
+    }
+    
+    Footer {
+        dock: bottom;
     }
     
     MessageWidget {
