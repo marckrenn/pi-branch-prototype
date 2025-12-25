@@ -442,6 +442,9 @@ class BranchScreen(Screen):
         Binding("d", "delete", "Delete (incl. below)"),
         Binding("p", "preview", "Toggle preview"),
         Binding("ctrl+i", "finish_insert", "Finish Insert", show=False),
+        # Hide inherited bindings
+        Binding("ctrl+z", "none", show=False),
+        Binding("ctrl+shift+z", "none", show=False),
     ]
     
     def __init__(self, store: ConversationStore, **kwargs):
@@ -477,9 +480,8 @@ class BranchScreen(Screen):
         tree.focus()
         # Defer cursor selection until after tree is fully rendered
         self.call_after_refresh(self._select_current_node, tree)
-        # Defer expansion again to ensure it happens after selection
-        if self.store.is_insert_between_mode():
-            self.set_timer(0.1, self._expand_insert_mode_path)
+        # Defer expansion to ensure it happens after selection
+        self.set_timer(0.1, self._expand_insert_mode_path)
     
     def _select_current_node(self, tree: Tree) -> None:
         """Move cursor to the current/latest node in the selected path."""
@@ -500,7 +502,14 @@ class BranchScreen(Screen):
             tree.scroll_to_node(node)
     
     def _expand_insert_mode_path(self) -> None:
-        """Expand path to current node when in insert mode."""
+        """Expand path to current node."""
+        # Always expand the selected path
+        path = self.store.get_selected_path()
+        for exchange in path:
+            if exchange.id in self._node_map:
+                self._node_map[exchange.id].expand()
+        
+        # Also expand to current position if in insert mode
         if self.store.is_insert_between_mode():
             current_id = self.store.current_exchange_id
             if current_id:
@@ -644,13 +653,11 @@ class BranchScreen(Screen):
             self._build_tree(tree)
             # Defer cursor selection until after tree is fully rendered
             self.call_after_refresh(self._select_node_by_id, tree, select_id)
-            # Defer expansion again to ensure it happens after selection
-            if self.store.is_insert_between_mode():
-                self.set_timer(0.1, self._expand_insert_mode_path)
+            # Defer expansion to ensure it happens after selection
+            self.set_timer(0.1, self._expand_insert_mode_path)
         else:
             self._update_tree_labels()
-            if self.store.is_insert_between_mode():
-                self.set_timer(0.1, self._expand_insert_mode_path)
+            self.set_timer(0.1, self._expand_insert_mode_path)
         
         self._update_preview()
         self._update_context_bar()
