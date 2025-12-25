@@ -441,6 +441,7 @@ class BranchScreen(Screen):
         Binding("s", "select", "Select this path"),
         Binding("d", "delete", "Delete (incl. below)"),
         Binding("p", "preview", "Toggle preview"),
+        Binding("ctrl+i", "finish_insert", "Finish Insert", show=False),
     ]
     
     def __init__(self, store: ConversationStore, **kwargs):
@@ -476,6 +477,9 @@ class BranchScreen(Screen):
         tree.focus()
         # Defer cursor selection until after tree is fully rendered
         self.call_after_refresh(self._select_current_node, tree)
+        # Defer expansion again to ensure it happens after selection
+        if self.store.is_insert_between_mode():
+            self.set_timer(0.1, self._expand_insert_mode_path)
     
     def _select_current_node(self, tree: Tree) -> None:
         """Move cursor to the current/latest node in the selected path."""
@@ -484,6 +488,8 @@ class BranchScreen(Screen):
         if path:
             last_exchange = path[-1]
             self._select_node_by_id(tree, last_exchange.id)
+        # Ensure insert-mode nodes stay expanded
+        self._expand_insert_mode_path()
     
     def _select_node_by_id(self, tree: Tree, exchange_id: str | None) -> None:
         """Move cursor to a specific node by exchange ID."""
@@ -492,6 +498,16 @@ class BranchScreen(Screen):
             tree.select_node(node)
             # Also scroll to make it visible
             tree.scroll_to_node(node)
+    
+    def _expand_insert_mode_path(self) -> None:
+        """Expand path to current node when in insert mode."""
+        if self.store.is_insert_between_mode():
+            current_id = self.store.current_exchange_id
+            if current_id:
+                path = self.store.get_path_to(current_id)
+                for exchange in path:
+                    if exchange.id in self._node_map:
+                        self._node_map[exchange.id].expand()
     
     def _update_context_bar(self) -> None:
         """Update the context window progress bar."""
@@ -509,7 +525,7 @@ class BranchScreen(Screen):
         header = self.query_one("#branch-header", Static)
         if self.store.is_insert_between_mode():
             header.update(
-                "[bold]Conversation Tree[/bold] [yellow](INSERT BETWEEN MODE - /done to finish)[/yellow]"
+                "[bold]Conversation Tree[/bold] [yellow](INSERT MODE - /done or ctrl+i to finish)[/yellow]"
             )
         else:
             header.update("[bold]Conversation Tree[/bold]")
@@ -551,10 +567,16 @@ class BranchScreen(Screen):
         if self.store.root:
             add_node(tree.root, self.store.root, True)
         
-        # Show pending insert-between children if any
+        # Show pending insert-between children at the correct tree level
         if self.store.is_insert_between_mode():
-            pending_node = tree.root.add("[yellow][PENDING - type /done to reattach][/]", data=None)
-            pending_node.expand()
+            # Find the current node (where new messages are being added)
+            current_id = self.store.current_exchange_id
+            parent_tree_node = self._node_map.get(current_id) if current_id else None
+            
+            if parent_tree_node:
+                pending_node = parent_tree_node.add("[yellow][PENDING - select & press 's' or ctrl+i to finish][/]", data="__PENDING__")
+            else:
+                pending_node = tree.root.add("[yellow][PENDING - select & press 's' or ctrl+i to finish][/]", data="__PENDING__")
             
             def add_pending(parent_node, exchange: Exchange):
                 preview = exchange.user_msg.content.replace("\n", " ")
@@ -566,6 +588,14 @@ class BranchScreen(Screen):
             
             for child in self.store._insert_between_children:
                 add_pending(pending_node, child)
+            
+            # Expand pending node and entire path from root to current node
+            pending_node.expand()
+            if parent_tree_node:
+                path = self.store.get_path_to(current_id)
+                for exchange in path:
+                    if exchange.id in self._node_map:
+                        self._node_map[exchange.id].expand()
     
     def _update_tree_labels(self) -> None:
         """Update tree node labels without rebuilding the tree structure."""
@@ -614,8 +644,13 @@ class BranchScreen(Screen):
             self._build_tree(tree)
             # Defer cursor selection until after tree is fully rendered
             self.call_after_refresh(self._select_node_by_id, tree, select_id)
+            # Defer expansion again to ensure it happens after selection
+            if self.store.is_insert_between_mode():
+                self.set_timer(0.1, self._expand_insert_mode_path)
         else:
             self._update_tree_labels()
+            if self.store.is_insert_between_mode():
+                self.set_timer(0.1, self._expand_insert_mode_path)
         
         self._update_preview()
         self._update_context_bar()
@@ -674,22 +709,42 @@ class BranchScreen(Screen):
     def action_insert(self) -> None:
         """Insert between - saves children, lets you insert, then reattaches."""
         exchange_id = self._get_highlighted_id()
-        if exchange_id:
+        if exchange_id and exchange_id != "__PENDING__":
             self.store.start_insert_between(exchange_id)
             self.app.pop_screen()
             self.app.query_one(ChatView).refresh_messages()
             # Update placeholder to show insert mode
             input_widget = self.app.query_one(Input)
-            input_widget.placeholder = "INSERT MODE: Type message, then /done to finish and reattach"
+            input_widget.placeholder = "INSERT MODE: Type message, then /done or ctrl+i to finish"
             input_widget.focus()
     
     def action_select(self) -> None:
         """Select this path (makes whole path to here selected)."""
         exchange_id = self._get_highlighted_id()
+        if exchange_id == "__PENDING__":
+            # Selecting PENDING node finishes insert mode
+            self.action_finish_insert()
+            return
         if exchange_id:
             self.store.select_exchange(exchange_id)
             self._refresh_tree(rebuild=False)  # Just update labels, preserve structure
             self.app.query_one(ChatView).refresh_messages()
+    
+    def action_finish_insert(self) -> None:
+        """Finish insert-between mode."""
+        if self.store.is_insert_between_mode():
+            self.store.finish_insert_between()
+            self._refresh_tree(rebuild=True)  # Structure changed
+            self._update_input_placeholder()
+            self.app.query_one(ChatView).refresh_messages()
+    
+    def _update_input_placeholder(self):
+        """Update input placeholder based on mode."""
+        input_widget = self.app.query_one(Input)
+        if self.store.is_insert_between_mode():
+            input_widget.placeholder = "INSERT MODE: Type message, then /done or ctrl+i to finish"
+        else:
+            input_widget.placeholder = "Type a message... (or /branch to open branch view)"
     
     def action_delete(self) -> None:
         """Delete the selected exchange."""
@@ -796,6 +851,7 @@ class MockPiApp(App):
         Binding("ctrl+b", "show_branches", "Branch View"),
         Binding("ctrl+z", "undo", "Undo"),
         Binding("ctrl+shift+z", "redo", "Redo"),
+        Binding("ctrl+i", "finish_insert", "Finish Insert", show=False),
     ]
     
     def __init__(self):
@@ -849,7 +905,7 @@ class MockPiApp(App):
         """Update input placeholder based on mode."""
         input_widget = self.query_one(Input)
         if self.store.is_insert_between_mode():
-            input_widget.placeholder = "INSERT MODE: Type message, then /done to finish and reattach"
+            input_widget.placeholder = "INSERT MODE: Type message, then /done or ctrl+i to finish"
         else:
             input_widget.placeholder = "Type a message... (or /branch to open branch view)"
     
@@ -866,6 +922,13 @@ class MockPiApp(App):
         """Redo - go down one level in the tree."""
         if self.store.redo():
             self.query_one(ChatView).refresh_messages()
+    
+    def action_finish_insert(self) -> None:
+        """Finish insert-between mode (ctrl+i)."""
+        if self.store.is_insert_between_mode():
+            self.store.finish_insert_between()
+            self.query_one(ChatView).refresh_messages()
+            self._update_input_placeholder()
 
 
 if __name__ == "__main__":
