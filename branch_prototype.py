@@ -468,11 +468,11 @@ class BranchScreen(Screen):
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("ctrl+b", "close", "Close", show=False),
-        Binding("b", "resume", "Branch/Resume"),
+        Binding("b", "resume", "Branch below/Resume"),
         Binding("i", "insert", "Insert below"),
         Binding("s", "select", "Select"),
         Binding("d", "delete", "Delete node"),
-        Binding("p", "preview", "Preview"),
+        Binding("p", "preview_toggle", "Toggle Preview"),
         Binding("c", "collapse_unselected", "Collapse unselected"),
         Binding("e", "expand_all", "Expand all"),
         Binding("ctrl+i", "finish_insert", "Finish Insert", show=False),
@@ -493,7 +493,7 @@ class BranchScreen(Screen):
         yield Container(
             Static(id="branch-header"),
             Tree("", id="branch-tree"),
-            Static(id="preview-panel"),
+            ScrollableContainer(Static(id="preview-panel"), id="preview-container"),
             Container(
                 ProgressBar(id="context-bar", total=self.store.MAX_CONTEXT_SIZE, show_eta=False),
                 Static(id="context-info"),
@@ -506,7 +506,8 @@ class BranchScreen(Screen):
     def on_mount(self) -> None:
         self._update_header()
         self._update_context_bar()
-        self._update_preview()
+        # Hide preview by default
+        self.query_one("#preview-container").display = False
         tree = self.query_one("#branch-tree", Tree)
         tree.show_root = False
         tree.root.expand()
@@ -695,27 +696,49 @@ class BranchScreen(Screen):
             self._update_tree_labels()
             self.set_timer(0.1, self._expand_insert_mode_path)
         
-        self._update_preview()
+        if self._preview_visible:
+            self._update_preview()
         self._update_context_bar()
     
     def _update_preview(self) -> None:
-        """Update the preview panel."""
+        """Update the preview panel with user prompts matching tree line positions."""
         preview_panel = self.query_one("#preview-panel", Static)
-        
-        if not self._preview_visible:
-            preview_panel.update("")
-            return
-        
         selected_path = self.store.get_selected_path()
-        lines = ["[bold]Preview selected context:[/bold]"]
+        selected_ids = {ex.id for ex in selected_path}
+        current_id = self.store.current_exchange_id
         
-        for i, exchange in enumerate(selected_path):
-            preview = exchange.user_msg.content.replace("\n", " ")
-            if len(preview) > 70:
-                preview = preview[:70] + "..."
-            lines.append(f"  {i + 1}. {preview}")
+        # Build lines matching tree structure, respecting collapsed nodes
+        lines = []
+        selected_num = [0]  # Counter for selected items only
         
-        preview_panel.update("\n".join(lines))
+        def add_lines(exchange: Exchange):
+            # Check if this node is visible in tree
+            tree_node = self._node_map.get(exchange.id)
+            if not tree_node:
+                return
+            
+            content = exchange.user_msg.content
+            is_current = exchange.id == current_id
+            
+            if exchange.id in selected_ids:
+                selected_num[0] += 1
+                if is_current:
+                    lines.append(f"[orange1]{selected_num[0]}. \\[HEAD] {content}[/orange1]")
+                else:
+                    lines.append(f"{selected_num[0]}. {content}")
+            else:
+                # Show unselected nodes dimmed with - prefix (same gray as tree)
+                lines.append(f"[#555555]-  {content}[/]")
+            
+            # Only recurse if this node is expanded in the tree
+            if tree_node.is_expanded:
+                for child in exchange.children:
+                    add_lines(child)
+        
+        if self.store.root:
+            add_lines(self.store.root)
+        
+        preview_panel.update(Text.from_markup("\n".join(lines)))
     
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         if event.node.data:
@@ -725,7 +748,8 @@ class BranchScreen(Screen):
             old_current = self.store.current_exchange_id
             self.store.current_exchange_id = event.node.data
             self._update_context_bar()
-            self._update_preview()
+            if self._preview_visible:
+                self._update_preview()
             self.store.current_exchange_id = old_current
     
     def _get_highlighted_id(self) -> str | None:
@@ -801,10 +825,20 @@ class BranchScreen(Screen):
             self._refresh_tree(rebuild=True)  # Structure changed, need rebuild
             self.app.query_one(ChatView).refresh_messages()
     
-    def action_preview(self) -> None:
+    def action_preview_toggle(self) -> None:
         """Toggle preview of selected trace."""
         self._preview_visible = not self._preview_visible
-        self._update_preview()
+        tree = self.query_one("#branch-tree", Tree)
+        preview_container = self.query_one("#preview-container")
+        
+        if self._preview_visible:
+            self._update_preview()
+            tree.display = False
+            preview_container.display = True
+        else:
+            tree.display = True
+            preview_container.display = False
+            tree.focus()
     
     def action_collapse_unselected(self) -> None:
         """Collapse all nodes not in the selected path."""
@@ -900,13 +934,14 @@ class MockPiApp(App):
     }
     
     #preview-panel {
-        margin-top: 1;
-        padding: 1;
-        background: $surface-darken-1;
+        padding: 0;
     }
     
     #preview-container {
-        padding: 1 2;
+        height: 1fr;
+        border: solid orange;
+        padding: 1;
+        background: #272727;
     }
     
     #preview-header {
