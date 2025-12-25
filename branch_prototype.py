@@ -473,6 +473,20 @@ class BranchScreen(Screen):
         tree.root.expand()
         self._build_tree(tree)
         tree.focus()
+        # Defer cursor selection until after tree is fully rendered
+        self.call_after_refresh(self._select_current_node, tree)
+    
+    def _select_current_node(self, tree: Tree) -> None:
+        """Move cursor to the current/latest node in the selected path."""
+        # Get the deepest node in the selected path
+        path = self.store.get_selected_path()
+        if path:
+            last_exchange = path[-1]
+            if last_exchange.id in self._node_map:
+                node = self._node_map[last_exchange.id]
+                tree.select_node(node)
+                # Also scroll to make it visible
+                tree.scroll_to_node(node)
     
     def _update_context_bar(self) -> None:
         """Update the context window progress bar."""
@@ -561,6 +575,8 @@ class BranchScreen(Screen):
         self._build_tree(tree)
         self._update_preview()
         self._update_context_bar()
+        # Defer cursor selection until after tree is fully rendered
+        self.call_after_refresh(self._select_current_node, tree)
     
     def _update_preview(self) -> None:
         """Update the preview panel."""
