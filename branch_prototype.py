@@ -436,15 +436,18 @@ class BranchScreen(Screen):
     
     BINDINGS = [
         Binding("escape", "close", "Close"),
-        Binding("r", "resume", "Resume/branch from here"),
-        Binding("i", "insert", "Insert between"),
-        Binding("s", "select", "Select this path"),
-        Binding("d", "delete", "Delete (incl. below)"),
-        Binding("p", "preview", "Toggle preview"),
+        Binding("ctrl+b", "close", "Close", show=False),
+        Binding("b", "resume", "Branch below"),
+        Binding("i", "insert", "Insert below"),
+        Binding("s", "select", "Select"),
+        Binding("d", "delete", "Delete node"),
+        Binding("p", "preview", "Preview"),
+        Binding("c", "collapse_unselected", "Collapse unselected"),
+        Binding("e", "expand_all", "Expand all"),
         Binding("ctrl+i", "finish_insert", "Finish Insert", show=False),
         # Hide inherited bindings
-        Binding("ctrl+z", "none", show=False),
-        Binding("ctrl+shift+z", "none", show=False),
+        Binding("ctrl+z", "noop", show=False),
+        Binding("ctrl+shift+z", "noop", show=False),
     ]
     
     def __init__(self, store: ConversationStore, **kwargs):
@@ -700,6 +703,10 @@ class BranchScreen(Screen):
             return tree.cursor_node.data
         return None
     
+    def action_noop(self) -> None:
+        """Do nothing - used to hide inherited bindings."""
+        pass
+    
     def action_close(self) -> None:
         self.app.pop_screen()
         self.app.query_one(ChatView).refresh_messages()
@@ -765,6 +772,34 @@ class BranchScreen(Screen):
         """Toggle preview of selected trace."""
         self._preview_visible = not self._preview_visible
         self._update_preview()
+    
+    def action_collapse_unselected(self) -> None:
+        """Collapse all nodes not in the selected path."""
+        selected_ids = self.store.get_selected_path_ids()
+        
+        def collapse_recursive(exchange: Exchange):
+            if exchange.id in self._node_map:
+                node = self._node_map[exchange.id]
+                if exchange.id in selected_ids:
+                    node.expand()
+                else:
+                    node.collapse()
+            for child in exchange.children:
+                collapse_recursive(child)
+        
+        if self.store.root:
+            collapse_recursive(self.store.root)
+    
+    def action_expand_all(self) -> None:
+        """Expand all nodes."""
+        def expand_recursive(exchange: Exchange):
+            if exchange.id in self._node_map:
+                self._node_map[exchange.id].expand()
+            for child in exchange.children:
+                expand_recursive(child)
+        
+        if self.store.root:
+            expand_recursive(self.store.root)
 
 
 class MockPiApp(App):
