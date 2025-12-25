@@ -361,6 +361,10 @@ def fibonacci(n: int) -> int:
             # Store deep copies of children to re-attach later
             self._insert_between_children = [self._deep_copy_exchange(c) for c in exchange.children]
             self._insert_between_parent_id = exchange_id
+            # Save the original selected child index to restore selection later
+            self._insert_between_original_selection = exchange.selected_child_index
+            # Save the path from insert point to original current position (for [>>] restoration)
+            self._insert_between_original_current_id = self.current_exchange_id
             # Set current position to this exchange (new messages added as new branch)
             self.current_exchange_id = exchange_id
     
@@ -376,13 +380,40 @@ def fibonacci(n: int) -> int:
             # Attach the copied children to the leaf
             for child in self._insert_between_children:
                 leaf.children.append(child)
-            if leaf.children:
-                leaf.selected_child_index = len(leaf.children) - len(self._insert_between_children)
+            
+            # Restore original selection: select the child that was originally selected
+            # This makes the selection go into the inserted thread
+            original_idx = getattr(self, '_insert_between_original_selection', 0)
+            if leaf.children and original_idx < len(self._insert_between_children):
+                leaf.selected_child_index = len(leaf.children) - len(self._insert_between_children) + original_idx
+        
+        # Find the equivalent position for [>>] in the reattached children
+        # We need to find the node in the reattached subtree that corresponds to the original current position
+        original_current_id = getattr(self, '_insert_between_original_current_id', None)
+        new_current_id = None
+        
+        if original_current_id and leaf.children:
+            # Search in the reattached children for a node that was at the original position
+            # The reattached children are copies, so we need to traverse to find the deepest selected node
+            def find_deepest_selected(node: Exchange) -> Exchange:
+                if node.children and node.selected_child_index < len(node.children):
+                    return find_deepest_selected(node.children[node.selected_child_index])
+                return node
+            
+            # Start from the selected reattached child
+            selected_child_idx = leaf.selected_child_index
+            if selected_child_idx < len(leaf.children):
+                deepest = find_deepest_selected(leaf.children[selected_child_idx])
+                new_current_id = deepest.id
         
         # Clear insert-between state
         self._insert_between_children = []
         self._insert_between_parent_id = None
-        self.current_exchange_id = None
+        self._insert_between_original_selection = 0
+        self._insert_between_original_current_id = None
+        
+        # Set current position
+        self.current_exchange_id = new_current_id
     
     def is_insert_between_mode(self) -> bool:
         """Check if we're in insert-between mode."""
@@ -437,7 +468,7 @@ class BranchScreen(Screen):
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("ctrl+b", "close", "Close", show=False),
-        Binding("b", "resume", "Branch below"),
+        Binding("b", "resume", "Branch/Resume"),
         Binding("i", "insert", "Insert below"),
         Binding("s", "select", "Select"),
         Binding("d", "delete", "Delete node"),
