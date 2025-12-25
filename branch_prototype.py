@@ -585,14 +585,14 @@ class BranchScreen(Screen):
             is_selected = exchange.id in selected_ids
             is_current = exchange.id == current_id
             
-            # Add [>>] marker before text if this is the current branch point
-            prefix = "[>>] " if is_current else ""
-            
-            # Style based on selection
-            if is_selected:
-                label = f"{prefix}{preview}"
+            # Style based on selection and current status
+            if is_current:
+                # Current node (HEAD) in orange
+                label = f"[orange1][HEAD] {preview}[/]"
+            elif is_selected:
+                label = preview
             else:
-                label = f"[#555555]{prefix}{preview}[/]"
+                label = f"[#555555]{preview}[/]"
             
             if is_root:
                 # First message: add directly to tree root, expand root
@@ -649,12 +649,14 @@ class BranchScreen(Screen):
             preview = exchange.user_msg.content.replace("\n", " ")
             is_selected = exchange.id in selected_ids
             is_current = exchange.id == current_id
-            prefix = "[>>] " if is_current else ""
             
-            if is_selected:
-                return f"{prefix}{preview}"
+            if is_current:
+                # Current node (HEAD) in orange
+                return f"[orange1][HEAD] {preview}[/]"
+            elif is_selected:
+                return preview
             else:
-                return f"[#555555]{prefix}{preview}[/]"
+                return f"[#555555]{preview}[/]"
         
         def update_node_label(exchange: Exchange):
             if exchange.id in self._node_map:
