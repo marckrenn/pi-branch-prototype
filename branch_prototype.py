@@ -134,7 +134,8 @@ def fibonacci(n: int) -> int:
         )
         e2.children.append(e3)
         
-        self.current_exchange_id = None  # At end
+        # Set current position to the last message
+        self.current_exchange_id = e3.id
     
     def _find_exchange(self, exchange_id: str, node: Exchange = None) -> Exchange | None:
         """Find an exchange by ID."""
