@@ -482,11 +482,15 @@ class BranchScreen(Screen):
         path = self.store.get_selected_path()
         if path:
             last_exchange = path[-1]
-            if last_exchange.id in self._node_map:
-                node = self._node_map[last_exchange.id]
-                tree.select_node(node)
-                # Also scroll to make it visible
-                tree.scroll_to_node(node)
+            self._select_node_by_id(tree, last_exchange.id)
+    
+    def _select_node_by_id(self, tree: Tree, exchange_id: str | None) -> None:
+        """Move cursor to a specific node by exchange ID."""
+        if exchange_id and exchange_id in self._node_map:
+            node = self._node_map[exchange_id]
+            tree.select_node(node)
+            # Also scroll to make it visible
+            tree.scroll_to_node(node)
     
     def _update_context_bar(self) -> None:
         """Update the context window progress bar."""
@@ -516,9 +520,7 @@ class BranchScreen(Screen):
         current_id = self.store.current_exchange_id
         
         def add_node(parent_node, exchange: Exchange, is_root: bool = False):
-            preview = exchange.user_msg.content[:50].replace("\n", " ")
-            if len(exchange.user_msg.content) > 50:
-                preview += "..."
+            preview = exchange.user_msg.content.replace("\n", " ")
             
             is_selected = exchange.id in selected_ids
             is_current = exchange.id == current_id
@@ -554,9 +556,7 @@ class BranchScreen(Screen):
             pending_node.expand()
             
             def add_pending(parent_node, exchange: Exchange):
-                preview = exchange.user_msg.content[:50].replace("\n", " ")
-                if len(exchange.user_msg.content) > 50:
-                    preview += "..."
+                preview = exchange.user_msg.content.replace("\n", " ")
                 label = f"[#888888]{preview}[/]"
                 node = parent_node.add(label, data=None)
                 node.expand()
@@ -566,17 +566,58 @@ class BranchScreen(Screen):
             for child in self.store._insert_between_children:
                 add_pending(pending_node, child)
     
-    def _refresh_tree(self):
-        """Refresh the tree display."""
+    def _update_tree_labels(self) -> None:
+        """Update tree node labels without rebuilding the tree structure."""
+        selected_ids = self.store.get_selected_path_ids()
+        current_id = self.store.current_exchange_id
+        
+        def get_label(exchange: Exchange) -> str:
+            preview = exchange.user_msg.content.replace("\n", " ")
+            is_selected = exchange.id in selected_ids
+            is_current = exchange.id == current_id
+            prefix = "[>>] " if is_current else ""
+            
+            if is_selected:
+                return f"{prefix}{preview}"
+            else:
+                return f"[#555555]{prefix}{preview}[/]"
+        
+        def update_node_label(exchange: Exchange):
+            if exchange.id in self._node_map:
+                node = self._node_map[exchange.id]
+                node.set_label(get_label(exchange))
+            for child in exchange.children:
+                update_node_label(child)
+        
+        if self.store.root:
+            update_node_label(self.store.root)
+    
+    def _refresh_tree(self, select_id: str | None = None, rebuild: bool = False):
+        """Refresh the tree display.
+        
+        Args:
+            select_id: Optional exchange ID to select after refresh.
+                      If None, preserves current cursor position.
+            rebuild: If True, completely rebuild the tree. If False, just update labels.
+        """
         self._update_header()
         tree = self.query_one("#branch-tree", Tree)
-        tree.clear()
-        tree.show_root = False
-        self._build_tree(tree)
+        
+        # Remember current cursor position if no explicit select_id
+        if select_id is None and tree.cursor_node and tree.cursor_node.data:
+            select_id = tree.cursor_node.data
+        
+        if rebuild:
+            tree.clear()
+            tree.show_root = False
+            self._build_tree(tree)
+            # Defer cursor selection until after tree is fully rendered
+            self.call_after_refresh(self._select_node_by_id, tree, select_id)
+        else:
+            self._update_tree_labels()
+        
         self._update_preview()
         self._update_context_bar()
-        # Defer cursor selection until after tree is fully rendered
-        self.call_after_refresh(self._select_current_node, tree)
     
     def _update_preview(self) -> None:
         """Update the preview panel."""
@@ -646,9 +687,7 @@ class BranchScreen(Screen):
         exchange_id = self._get_highlighted_id()
         if exchange_id:
             self.store.select_exchange(exchange_id)
-            self._refresh_tree()
-            self._update_preview()
-            self._update_context_bar()
+            self._refresh_tree(rebuild=False)  # Just update labels, preserve structure
             self.app.query_one(ChatView).refresh_messages()
     
     def action_delete(self) -> None:
@@ -656,8 +695,7 @@ class BranchScreen(Screen):
         exchange_id = self._get_highlighted_id()
         if exchange_id:
             self.store.delete_exchange(exchange_id)
-            self._refresh_tree()
-            self._update_context_bar()
+            self._refresh_tree(rebuild=True)  # Structure changed, need rebuild
             self.app.query_one(ChatView).refresh_messages()
     
     def action_preview(self) -> None:
